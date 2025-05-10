@@ -69,7 +69,7 @@ python backend/chatbot/chatbot.py
 
 This will start a terminal-based interactive session where you can ask the chatbot questions about your trading data. Simply type a question, and the chatbot will provide a response.
 
-Sample Questions You Can Ask:
+## Sample Questions You Can Ask:
 "What was my most profitable trade?"
 
 "How much was deposited into the account during the month?"
@@ -78,28 +78,10 @@ Sample Questions You Can Ask:
 
 "Can you summarize my most profitable trade?"
 
-To exit the chatbot, simply type exit and press Enter.
-
-How to Use
-After running the project, you can interact with the chatbot by typing questions about your trading data.
-
-For example:
-
-"What was my most profitable trade?"
-The chatbot will look at the trade data and summarize the most profitable trade based on your inputs.
-
-"How much was deposited into the account during the month?"
-The chatbot will give you the total deposit amount for the month.
-
-Notes
+## Notes
 The chatbot currently handles basic if-elif cases for questions like "deposit", "most profitable", and "loss percentage".
 
 The chatbot uses OpenAI's API to summarize and respond with insights about your trading data.
 
 Net profit calculations: There is currently a small issue with calculating net profits in cases where there are multiple "Sell to Close" (STC) transactions for a single "Buy to Open" (BTO). This issue needs further investigation.
 
-If you want to expand the chatbot to handle additional queries, you can add more if-elif cases to the chatbot() function.
-
-```
-
-```
