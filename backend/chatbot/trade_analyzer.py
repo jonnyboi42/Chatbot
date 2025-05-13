@@ -7,7 +7,6 @@ def total_deposits(df):
     deposit_list = deposits[['Amount_clean', 'Activity Date']]  
     return total_deposit_amount, deposit_list
 
-
 def get_most_profitable_trade(trades):
     most_profitable_trade = None
     highest_profit = 0.0
@@ -43,8 +42,7 @@ def calculate_oexp_loss_percentage(trades):
 def get_all_trades(df):
     open_positions = []  
     all_trades = []  
-
-    
+ 
     for _, row in df.iloc[::-1].iterrows():
         if row['Trans Code'] == 'OEXP':  
             

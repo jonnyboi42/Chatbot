@@ -1,144 +1,138 @@
+import numpy as np
 from openai import OpenAI
 from trade_analyzer import total_deposits, get_most_profitable_trade, calculate_oexp_loss_percentage, get_all_trades
 from data_loader import load_trading_data
 from dotenv import load_dotenv
 import os
 
+# Load environment variables
 load_dotenv()
 
-class TextSummarizer:
-    openai_model = "gpt-3.5-turbo"
-
-    def __init__(self):
-        self.apikey = os.environ.get("OPENAI_API_KEY")
-
-    def fetch_api_key(self):
-        pass
-
-    def average_sentences(self, list_of_sentences):
-        client = OpenAI(api_key=self.apikey)
-        prompt = "Here is a list of multiple sentences that I want you to summarize and rewrite as a single sentence. The sentences are separated by newline characters:\n{sentences}"
-        formatted_prompt = prompt.format(sentences="\n".join(list_of_sentences))
-
-        completion = client.chat.completions.create(
-            model=self.openai_model,
-            messages=[
-                {"role": "system", "content": "You are an assistant that is able to read several sentences and then combine them into a single summarized sentence. The sentences will be sent to you with a new line character \\n separating them. You will return a single sentence."},
-                {"role": "user", "content": formatted_prompt}
-            ],
-            max_tokens=150
-        )
-
-        summarized_sentence = completion.choices[0].message.content
-        client.close()
-
-        return summarized_sentence
-
+# Load trading data
 df = load_trading_data("../data/Trades_sample.csv")
 trades = get_all_trades(df)
 
-def ask_openai(question, context=""):
-    prompt = f"Context: {context}\n\nQuestion: {question}\nAnswer:"
-    
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  
-        messages=[
-            {"role": "system", "content": "You are an AI trading assistant who helps summarize trade data and provide insights."},
-            {"role": "user", "content": question}
-        ],
-        max_tokens=150
+# Define intent examples for embedding comparison
+intent_examples = {
+    "most_profitable": "What was the most profitable trade?",
+    "deposits": "How much money was deposited this month?",
+    "oexp_loss": "What percent of losses came from options expiring?",
+    "advice": "What advice would you give to improve trading performance?"
+}
+
+# Embedding + similarity functions
+def get_embedding(text, client):
+    response = client.embeddings.create(
+        model="text-embedding-ada-002",
+        input=text
     )
-    
-    return response.choices[0].message.content.strip()
+    return response.data[0].embedding
 
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Main chatbot logic
 def chatbot(question):
-    question = question.strip().lower()
+    question = question.strip()
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    if "most profitable" in question:
-        most_profitable_trade = get_most_profitable_trade(trades)
-        
-        instrument = most_profitable_trade['instrument']
-        net_profit = most_profitable_trade['net_profit']
-        description = most_profitable_trade['description']
-        date = most_profitable_trade['date']
-        quantity = most_profitable_trade['quantity']
-        
-        list_of_sentences = [
-            f"The most profitable trade was made on {date}.",
-            f"The instrument traded was {instrument}.",
-            f"The trade description is: {description}.",
-            f"The net profit from this trade was ${net_profit:.2f}.",
-            f"The quantity of trades executed was {quantity}."
+    # Embed user's question
+    question_embedding = get_embedding(question, client)
+
+    # Find best matching intent
+    best_intent = None
+    highest_score = -1
+    for key, sample in intent_examples.items():
+        intent_embedding = get_embedding(sample, client)
+        score = cosine_similarity(question_embedding, intent_embedding)
+        if score > highest_score:
+            highest_score = score
+            best_intent = key
+
+    # Reject unclear questions
+    MIN_SIMILARITY_THRESHOLD = 0.80
+    if highest_score < MIN_SIMILARITY_THRESHOLD:
+        return "Sorry, I couldn't understand your question. Please try asking about trades, deposits, or losses."
+
+    # Intent-based routing
+    if best_intent == "most_profitable":
+        trade = get_most_profitable_trade(trades)
+        return (
+            f"Most Profitable Trade:\n"
+            f"Date: {trade['date']}\n"
+            f"Instrument: {trade['instrument']}\n"
+            f"Description: {trade['description']}\n"
+            f"Net Profit: ${trade['net_profit']:.2f}\n"
+            f"Quantity: {trade['quantity']}"
+        )
+
+    elif best_intent == "deposits":
+        total, deposit_list = total_deposits(df)
+        deposit_info = deposit_list.to_string(index=False)
+        return (
+            f"Total Deposits for the Month: ${total:.2f}\n"
+            f"Number of Deposits: {len(deposit_list)}\n\n"
+            f"Deposit Details:\n{deposit_info}"
+        )
+
+    elif best_intent == "oexp_loss":
+        percent, oexp_trades = calculate_oexp_loss_percentage(trades)
+        if not oexp_trades:
+            return f"No OEXP loss trades found. Percentage: {percent:.2f}%"
+
+        summary_lines = [
+            f"{trade['instrument']} | {trade['description']} | Qty: {trade['quantity']} | "
+            f"Date: {trade['date']} | Loss: ${abs(trade['net_profit']):.2f}"
+            for trade in oexp_trades
         ]
-        
-        summarizer = TextSummarizer()
-        summarized_trade = summarizer.average_sentences(list_of_sentences)
-        
-        return f"Summary: {summarized_trade}"
+        return (
+            f"Percentage of Losses from OEXP: {percent:.2f}%\n"
+            f"Summary of OEXP Loss Trades:\n" + "\n".join(summary_lines)
+        )
 
-    elif "deposit" in question:
-        total_deposit_amount, deposit_list = total_deposits(df)
+    elif best_intent == "advice":
+        # Convert trade summaries into text chunks
+        trade_summaries = []
+        for trade in trades:
+            line = (
+                f"{trade['date']} | {trade['instrument']} | {trade['description']} | "
+                f"Qty: {trade['quantity']} | Net: ${trade['net_profit']:.2f}"
+            )
+            trade_summaries.append(line)
 
-        list_of_sentences = [
-            f"The Total Deposit amount for the month was ${total_deposit_amount:.2f}.",
-            f"There were {len(deposit_list)} deposit transactions recorded."
-        ]
+        # Join them into a single context block
+        trade_context = "\n".join(trade_summaries)
 
-        summarizer = TextSummarizer()
-        summarized_deposit_info = summarizer.average_sentences(list_of_sentences)
+        # Prompt GPT to generate advice
+        prompt = (
+            "Here is a summary of a trader's activity. "
+            "Based on this, give 2–3 clear and constructive suggestions to improve trading performance, "
+            "such as reducing risk, timing trades better, or avoiding common mistakes.\n\n"
+            f"{trade_context}"
+        )
 
-        return f"Deposit Summary: {summarized_deposit_info}\nDetails: {deposit_list.to_string(index=False)}"
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a financial trading assistant who gives advice."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=300
+        )
 
-    elif "loss percentage" in question:
+        return "Trading Advice:\n" + response.choices[0].message.content.strip()
 
-        oexp_loss_percentage, oexp_loss_trades = calculate_oexp_loss_percentage(trades)
+    return "Sorry, I didn't understand that question. Please ask about deposits, profitable trades, or loss percentages."
 
-        if oexp_loss_trades:
-            summaries = []  
-            
-            for trade in oexp_loss_trades:
-                
-                instrument = trade['instrument']
-                description = trade['description']
-                quantity = trade['quantity']
-
-                list_of_sentences = [
-                    f"The instrument for this OEXP loss trade was {instrument}.",
-                    f"The trade description is: {description}.",
-                    f"The quantity of trades executed was {quantity}."
-                    f"The Percentage of loss from OEXP is {oexp_loss_percentage:.2f}"
-                ]
-
-                summarizer = TextSummarizer()
-                summarized_trade = summarizer.average_sentences(list_of_sentences)
-
-                summaries.append(summarized_trade)
-
-            all_summaries = "\n".join(summaries)
-            return f"Summary of OEXP Loss Trades:\n{all_summaries}"
-
-        else:
-            return f"No OEXP loss trades found. Percentage of Losses from OEXP: {oexp_loss_percentage:.2f}%"
-
-    elif "advice" in question:
-
-        advice = ask_openai(question)
-        return f"Risk Management Advice: {advice}"
-
-    else:
-        return "Sorry, I didn't understand that question. Please ask about deposits, profitable trades, loss percentages, or risk advice."
-
+# Run chatbot
 def main():
     print("Welcome to the Trading AI Chatbot!")
-    print("You can ask questions about deposits, most profitable trades, loss percentages, or risk advice.")
-    
+    print("You can ask questions like:\n- Most profitable trade\n- How much was deposited?\n- Losses from expiry?")
     while True:
-        question = input("Ask a question: ").strip()
+        question = input("\nAsk a question (or type 'exit'): ").strip()
         if question.lower() == "exit":
             break
-        
-        answer = chatbot(question)
-        print(answer)
+        print(chatbot(question))
 
 if __name__ == "__main__":
     main()
